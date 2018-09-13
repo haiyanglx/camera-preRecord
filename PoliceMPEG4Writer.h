@@ -44,7 +44,7 @@ public:
 
     // Returns INVALID_OPERATION if there is no source or track.
     virtual status_t start(MetaData *param = NULL);
-    virtual status_t stop() { return reset(); }
+    virtual status_t stop() { mSplitFlag = false;return reset(); }
     virtual status_t pause();
     virtual bool reachedEOS();
     virtual status_t dump(int fd, const Vector<String16>& args);
@@ -74,6 +74,10 @@ public:
 protected:
     virtual ~PoliceMPEG4Writer();
 
+public:
+	status_t stop(bool splitFlag) { mSplitFlag = splitFlag;return reset(); }
+	void     setSplitFlag(bool flag) { mSplitFlag = flag;}
+
 private:
     class Track;
 
@@ -90,6 +94,8 @@ private:
     bool mWriterThreadStarted;  // Only writer thread started successfully
     bool mEncrptFlag;
 	Aes* myAes;
+public:
+	volatile bool mSplitFlag;
 protected:
     off64_t mOffset;
 private:
@@ -226,6 +232,7 @@ private:
     void sendSessionSummary();
     void release();
     status_t reset();
+	
 
     static uint32_t getMpeg4Time();
 
