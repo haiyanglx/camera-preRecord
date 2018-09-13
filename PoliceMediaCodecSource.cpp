@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_NDEBUG 0
+//#define LOG_NDEBUG 0
 #define LOG_TAG "PoliceMediaCodecSource"
 #define DEBUG_DRIFT_TIME 0
 
@@ -386,6 +386,7 @@ sp<IGraphicBufferProducer> PoliceMediaCodecSource::getGraphicBufferProducer() {
     return mGraphicBufferProducer;
 }
 
+
 status_t PoliceMediaCodecSource::read(
         MediaBuffer** buffer, const ReadOptions* /* options */) {
     Mutexed<Output>::Locked output(mOutput);
@@ -396,16 +397,16 @@ status_t PoliceMediaCodecSource::read(
     }
 	
     if (!output->mEncoderReachedEOS) {
-
+		int64_t timestampUs = 0;
+		int32_t numberId = 0;
 		if(mPreRecord){
 			if(mfirstFlag){
 				*buffer = mFirstBuffer;
 				mfirstFlag = false;
-				ALOGE("read firstBuffer,source=%s,datasize=%d",mIsVideo?"Video":"Audio",(int)((*buffer)->range_length()));
+				ALOGV("read firstBuffer,source=%s,datasize=%d",mIsVideo?"Video":"Audio",(int)((*buffer)->range_length()));
 				return OK;
 			}else{
-				int64_t timestampUs = 0;
-				int32_t numberId = 0;
+				
 				if(mIsVideo){
 					if(mfirstVideoFlag){
 						mfirstVideoFlag = false;
@@ -419,7 +420,7 @@ status_t PoliceMediaCodecSource::read(
         						
 								break;
 							}else{
-								ALOGE("video delete numberId=%d,timeUs=(%.3f secs),datasize=%d",numberId,timestampUs / 1E6,(int)((*it)->range_length()));
+								ALOGV("video delete numberId=%d,timeUs=(%.3f secs),datasize=%d",numberId,timestampUs / 1E6,(int)((*it)->range_length()));
                 				(*it)->release();
 								it = output->mBufferQueue.erase(it);
 							}
@@ -429,42 +430,128 @@ status_t PoliceMediaCodecSource::read(
 						(*buffer)->meta_data()->findInt32(kKeyNumberID, &numberId);
 						(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
 						(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
-						ALOGE("video add Iframe numberId=%d,firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",numberId,mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
+						ALOGV("video add Iframe numberId=%d,firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",numberId,mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
 						output->mBufferQueue.erase(output->mBufferQueue.begin());
 					}
 					else{
-						
-						*buffer = *output->mBufferQueue.begin();
-						(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
-						(*buffer)->meta_data()->findInt32(kKeyNumberID, &numberId);
-						(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
-						(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
-						ALOGE("video add numberId=%d,firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",numberId,mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
-						output->mBufferQueue.erase(output->mBufferQueue.begin());
+						if(mSplitFlag){
+							//if(mfirstSplitFlag){
+							//	mfirstSplitFlag = false;
+							//	*buffer = mSplitBuffer;
+							//	ALOGV("read splitBuffer 1,datasize=%d",(int)((*buffer)->range_length()));
+							//	return OK;
+							//}
+							//else{
+								if(mfirstSplitDataFlag){
+									mfirstSplitDataFlag = false;
+									*buffer = *output->mBufferQueue.begin();
+									(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+									mFirstVideoTimeUs = timestampUs;
+									(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
+									(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
+									ALOGI("read splitBuffer 1,source=%s,datasize=%d",mIsVideo?"Video":"Audio",(int)((*buffer)->range_length()));
+								}
+								else{
+									*buffer = *output->mBufferQueue.begin();
+									(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+									(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
+									(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
+									ALOGV("split firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
+								}
+								output->mBufferQueue.erase(output->mBufferQueue.begin());
+							//}
+						}else{
+							*buffer = *output->mBufferQueue.begin();
+							(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+							(*buffer)->meta_data()->findInt32(kKeyNumberID, &numberId);
+							(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
+							(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
+							ALOGV("video add numberId=%d,firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",numberId,mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
+							output->mBufferQueue.erase(output->mBufferQueue.begin());
+						}
 					}
 				}
 				else{
-					*buffer = *output->mBufferQueue.begin();
-					if(mfirstVideoFlag){
-						mfirstVideoFlag = false;
-        				(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
-						mFirstVideoTimeUs = timestampUs;
-            		}
-						
-					(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
-					(*buffer)->meta_data()->findInt32(kKeyNumberID, &numberId);
-					(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
+					if(mSplitFlag){
+						//if(mfirstSplitFlag){
+						//	mfirstSplitFlag = false;
+						//	*buffer = mSplitBuffer;
+						//	ALOGV("read splitBuffer 2,datasize=%d",(int)((*buffer)->range_length()));
+						//	return OK;
+						//}
+						//else{
+							if(mfirstSplitDataFlag){
+								mfirstSplitDataFlag = false;
+								*buffer = *output->mBufferQueue.begin();
+								(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+								mFirstVideoTimeUs = timestampUs;
+								(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
+								ALOGI("read splitBuffer 2,source=%s,datasize=%d",mIsVideo?"Video":"Audio",(int)((*buffer)->range_length()));
+							}
+							else{
+								*buffer = *output->mBufferQueue.begin();
+								(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+								(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
+								ALOGV("split 22 firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
+							}
+							output->mBufferQueue.erase(output->mBufferQueue.begin());
+						//}
+					}
+					else{
+				
+						*buffer = *output->mBufferQueue.begin();
+						if(mfirstVideoFlag){
+							mfirstVideoFlag = false;
+	        				(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+							mFirstVideoTimeUs = timestampUs;
+	            		}
+							
+						(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+						(*buffer)->meta_data()->findInt32(kKeyNumberID, &numberId);
+						(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
 
-					ALOGE("audio add numberId=%d,firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",numberId,mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
-					output->mBufferQueue.erase(output->mBufferQueue.begin());
+						ALOGV("audio add numberId=%d,firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",numberId,mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
+						output->mBufferQueue.erase(output->mBufferQueue.begin());
+					}
 				}
 			}
 	        return OK;
 		}
 		else{
-			*buffer = *output->mBufferQueue.begin();
-			ALOGE("read mBufferQueue.size=%d,source=%s,datasize=%d",(int)(output->mBufferQueue.size()),mIsVideo?"Video":"Audio",(int)((*buffer)->range_length()));
-	        output->mBufferQueue.erase(output->mBufferQueue.begin());
+			if(mSplitFlag){
+				//if(mfirstSplitFlag){
+				//	mfirstSplitFlag = false;
+				//	*buffer = mSplitBuffer;
+				//	ALOGV("read splitBuffer 3,datasize=%d",(int)((*buffer)->range_length()));
+				//	return OK;
+				//}
+				//else{
+					if(mfirstSplitDataFlag){
+						mfirstSplitDataFlag = false;
+						*buffer = *output->mBufferQueue.begin();
+						(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+						mFirstVideoTimeUs = timestampUs;
+						(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
+						if(mIsVideo)
+						(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
+						ALOGI("read splitBuffer 33,source=%s,datasize=%d,mBufferQueue.size=%d",mIsVideo?"Video":"Audio",(int)((*buffer)->range_length()),(int)(output->mBufferQueue.size()));
+					}
+					else{
+						*buffer = *output->mBufferQueue.begin();
+						(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+						(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
+						if(mIsVideo)
+						(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
+						ALOGV("split 33 firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
+					}
+					output->mBufferQueue.erase(output->mBufferQueue.begin());
+				//}
+			}
+			else{
+				*buffer = *output->mBufferQueue.begin();
+				ALOGV("read mBufferQueue.size=%d,source=%s,datasize=%d",(int)(output->mBufferQueue.size()),mIsVideo?"Video":"Audio",(int)((*buffer)->range_length()));
+		        output->mBufferQueue.erase(output->mBufferQueue.begin());
+			}
 	        return OK;
 		}
     }
@@ -524,11 +611,15 @@ PoliceMediaCodecSource::PoliceMediaCodecSource(
 	ALOGE("mIsAvc =%d,mIsHevc = %d", mIsAvc,mIsHevc);
 
 	mFirstBuffer = NULL;
+	mSplitBuffer = NULL;
 	mfirstFlag = true;
 	mfirstVideoFlag = true;
 
 	mFirstVideoTimeUs = 0;
 	mPreRecord =false;
+	mSplitFlag = false;
+	mfirstSplitFlag = false;
+	mfirstSplitDataFlag = false;
 
 	mVideoPreRecordMemoryCount = 0;
 	mAudioPreRecordMemoryCount = 0;
@@ -912,6 +1003,17 @@ void PoliceMediaCodecSource::setPreRecord(bool value){
 		setPreRecordDuration(time);
 	}
 }
+
+//void setSplitFlag(bool splitFlag);
+void PoliceMediaCodecSource::setSplitFlag(bool splitFlag){
+	ALOGV("setSplitFlag %d", splitFlag);
+	mSplitFlag = splitFlag;
+	if(mSplitFlag){
+		mfirstSplitFlag = true;
+		mfirstSplitDataFlag = true;
+	}
+}
+
 void PoliceMediaCodecSource::setPreRecordDuration(int durationTime){
 	if(mPreRecord){
 		switch(durationTime){
@@ -932,7 +1034,8 @@ void PoliceMediaCodecSource::setPreRecordDuration(int durationTime){
 				mAudioPreRecordMemoryCount = 10 * 50;
 				break;
 		}
-		
+
+		ALOGV("mVideoPreRecordMemoryCount=%d,mAudioPreRecordMemoryCount=%d", mVideoPreRecordMemoryCount,mAudioPreRecordMemoryCount);
 	}
 }
 
@@ -999,7 +1102,7 @@ void PoliceMediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
             CHECK(msg->findInt64("timeUs", &timeUs));
             CHECK(msg->findInt32("flags", &flags));
 
-			ALOGE("index=%d,size=%d,timeUs/1000000=(%.3f secs),flags=%d,source=%s",index,(int)size,timeUs / 1E6,flags,mIsVideo? "Video":"Audio");
+			ALOGV("index=%d,size=%d,timeUs/1000000=(%.3f secs),flags=%d,source=%s",index,(int)size,timeUs / 1E6,flags,mIsVideo? "Video":"Audio");
 
             if (flags & MediaCodec::BUFFER_FLAG_EOS) {
                 mEncoder->releaseOutputBuffer(index);
@@ -1093,14 +1196,14 @@ void PoliceMediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
 
 				if(mPreRecord){
 					uint8_t* dataStart = (uint8_t*)mbuf->data();
-					ALOGE("first %02x %02x %02x %02x %02x timeus= (%.3f secs),",dataStart[0],dataStart[1],dataStart[2],dataStart[3],dataStart[4],decodingTimeUs/1E6);
+					ALOGV("first %02x %02x %02x %02x %02x timeus= (%.3f secs),",dataStart[0],dataStart[1],dataStart[2],dataStart[3],dataStart[4],decodingTimeUs/1E6);
 
 		            {
 		            	if(!(flags & MediaCodec::BUFFER_FLAG_CODECCONFIG)){
 			                Mutexed<Output>::Locked output(mOutput);
 							mbuf->meta_data()->setInt32(kKeyNumberID, (int)(output->mBufferQueue.size()));
 			                output->mBufferQueue.push_back(mbuf);
-							ALOGE("add mBufferQueue.size=%d,source=%s,datasize=%d",(int)(output->mBufferQueue.size()),mIsVideo?"Video":"Audio",(int)(mbuf->range_length()));
+							ALOGV("add mBufferQueue.size=%d,source=%s,datasize=%d",(int)(output->mBufferQueue.size()),mIsVideo?"Video":"Audio",(int)(mbuf->range_length()));
 							uint32_t sizeCount = 0;
 							if(mIsVideo){
 								sizeCount = mVideoPreRecordMemoryCount;
