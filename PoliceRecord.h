@@ -23,6 +23,8 @@
 #include <utils/String8.h>
 #include <media/stagefright/MediaSource.h>
 #include <system/audio.h>
+#include <utils/threads.h>
+
 
 #include <MetadataBufferType.h>
 
@@ -43,6 +45,7 @@ class IGraphicBufferProducer;
 class SurfaceMediaSource;
 struct ALooper;
 struct AMessage;
+
 
 struct PoliceRecorder : public MediaRecorderBase {
     PoliceRecorder(const String16 &opPackageName);
@@ -75,6 +78,16 @@ struct PoliceRecorder : public MediaRecorderBase {
     virtual status_t dump(int fd, const Vector<String16>& args) const;
     // Querying a SurfaceMediaSourcer
     virtual sp<IGraphicBufferProducer> querySurfaceMediaSource() const;
+public:
+	status_t setCamera();
+	
+private:
+	status_t stop(bool flag);
+	void threadFunc(); 
+	static void *ThreadWrapper(void *me); 
+	status_t stopThread();
+	status_t createThread();	
+	status_t setupMPEG4Recording();
 
 protected:
     sp<hardware::ICamera> mCamera;
@@ -136,6 +149,12 @@ protected:
 
     bool mStarted;
 	bool mPreRecord;
+
+	//sp<PoliceMPEG4Writer> mMpeg4Writer;
+	int32_t mSplitFd;
+	bool    mThreadStarted;
+	pthread_t       mThread;
+	int32_t mSplitOutFd;
 	//bool mPreRecordStart;
     // Needed when GLFrames are encoded.
     // An <IGraphicBufferProducer> pointer
@@ -200,11 +219,16 @@ protected:
     void clipNumberOfAudioChannels();
     void setDefaultProfileIfNecessary();
     void setDefaultVideoEncoderIfNecessary();
+	//add new interface
+	
     virtual status_t handleCustomOutputFormats() {return UNKNOWN_ERROR;}
     virtual status_t handleCustomRecording() {return UNKNOWN_ERROR;}
     virtual status_t handleCustomAudioSource(sp<AMessage> /*format*/) {return UNKNOWN_ERROR;}
     virtual status_t handleCustomAudioEncoder() {return UNKNOWN_ERROR;}
     virtual sp<MediaSource> setPCMRecording() {return NULL;}
+
+	
+	
 
     PoliceRecorder(const PoliceRecorder &);
     PoliceRecorder &operator=(const PoliceRecorder &);
@@ -213,3 +237,4 @@ protected:
 }  // namespace android
 
 #endif  // STAGEFRIGHT_RECORDER_H_
+
