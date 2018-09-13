@@ -73,6 +73,7 @@ protected:
 
 public:
 void setPreRecord(bool value);
+void setSplitFlag(bool splitFlag);
 void setPreRecordDuration(int durationTime);
 
 private:
@@ -150,10 +151,14 @@ private:
     int32_t mGeneration;
 
 	MediaBuffer* mFirstBuffer;
+	MediaBuffer* mSplitBuffer;
 	bool mfirstFlag;
 	bool mfirstVideoFlag;
 	int64_t mFirstVideoTimeUs;
 	bool mPreRecord;
+	bool mSplitFlag;
+	bool mfirstSplitFlag;
+	bool mfirstSplitDataFlag;
 	int32_t mVideoPreRecordMemoryCount;
 	int32_t mAudioPreRecordMemoryCount;
 
