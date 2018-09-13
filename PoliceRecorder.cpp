@@ -55,6 +55,14 @@
 #include <sys/types.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <sys/prctl.h>
+
+#include <stdio.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
+
 
 #include <system/audio.h>
 
@@ -63,11 +71,17 @@
 
 namespace android {
 
+static sp<hardware::ICamera> mPoliceCamera=NULL;
+static sp<ICameraRecordingProxy> mPoliceCameraProxy=NULL;
+
 static const int64_t kMax32BitFileSize = 0x00ffffffffLL; // 4GB
 static const float kTypicalDisplayRefreshingRate = 60.f;
 // display refresh rate drops on battery saver
 static const float kMinTypicalDisplayRefreshingRate = kTypicalDisplayRefreshingRate / 2;
 static const int kMaxNumVideoTemporalLayers = 8;
+
+sp<PoliceMPEG4Writer> mMpeg4Writer = NULL;
+
 
 // To collect the encoder usage for the battery app
 static void addBatteryData(uint32_t params) {
@@ -245,8 +259,28 @@ status_t PoliceRecorder::setCamera(const sp<hardware::ICamera> &camera,
 
     mCamera = camera;
     mCameraProxy = proxy;
+
+	mPoliceCameraProxy = proxy;
+	mPoliceCamera = camera;
     return OK;
 }
+
+status_t PoliceRecorder::setCamera() {
+	ALOGV("setPoliceCamera");
+	if (mPoliceCamera == NULL) {
+		ALOGE("camera is NULL");
+		return BAD_VALUE;
+	}
+	if (mPoliceCameraProxy == NULL) {
+		ALOGE("camera proxy is NULL");
+		return BAD_VALUE;
+	}
+
+	mCamera = mPoliceCamera;
+	mCameraProxy = mPoliceCameraProxy;
+	return OK;
+}
+
 
 status_t PoliceRecorder::setPreviewSurface(const sp<IGraphicBufferProducer> &surface) {
     ALOGV("setPreviewSurface: %p", surface.get());
@@ -263,7 +297,7 @@ status_t PoliceRecorder::setInputSurface(
 }
 
 status_t PoliceRecorder::setOutputFile(int fd, int64_t offset, int64_t length) {
-    ALOGV("setOutputFile: %d, %" PRId64 ", %" PRId64 "", fd, offset, length);
+    ALOGE("setOutputFile: %d, %" PRId64 ", %" PRId64 "", fd, offset, length);
     // These don't make any sense, do they?
     CHECK_EQ(offset, 0ll);
     CHECK_EQ(length, 0ll);
@@ -847,16 +881,109 @@ status_t PoliceRecorder::prepareInternal() {
 }
 
 status_t PoliceRecorder::prepare() {
-	char prop[92]={0};
-    property_get("persist.sys.precord.config", prop, "0");
-    mPreRecord = (atoi(prop) > 0);
+	if(!mThreadStarted){
+		char prop[92]={0};
+	    property_get("persist.sys.precord.config", prop, "0");
+	    mPreRecord = (atoi(prop) > 0);
 
-	ALOGV("mPreRecord: %d ",mPreRecord);
-	
-    if (mVideoSource == VIDEO_SOURCE_SURFACE) {
-        return prepareInternal();
-    }
+		ALOGV("mPreRecord: %d ",mPreRecord);
+		
+	    if (mVideoSource == VIDEO_SOURCE_SURFACE) {
+	        return prepareInternal();
+	    }
+	}
+	else{
+		ALOGE("prepare ignore when mThreadStarted: %d ",mThreadStarted);
+	}
     return OK;
+}
+
+void PoliceRecorder::threadFunc() {
+    ALOGV("threadFunc  start");
+
+    prctl(PR_SET_NAME, (unsigned long)"PoliceRecorder", 0, 0, 0);
+
+    //Mutex::Autolock autoLock(mLock);
+    while (mThreadStarted) {
+
+		
+		char prop[92]={0};
+		property_get("persist.sys.record.split.fd", prop, "0");
+		mSplitFd = atoi(prop);
+
+		ALOGV("mSplitFd: %d,file name=%s ",mSplitFd,prop);
+		char* pstr = NULL;
+		if(prop[0] != 0){
+			pstr = strstr(prop,"mp4");
+		}
+		
+		if(pstr != NULL){
+			
+			stop(true);
+			
+			int fdw = open(prop,O_CREAT | O_TRUNC  | O_RDWR,0666);
+     		if(fdw < 0)
+         		ALOGE("split record open file error=%s",strerror(errno));
+			
+        	mWriter = NULL;
+			mOutputFd = fdw;
+			property_set("persist.sys.record.split.fd", "0");
+			usleep(300000);
+			setupMPEG4Recording();
+			sp<MetaData> meta = new MetaData;
+	        setupMPEG4orWEBMMetaData(&meta);
+			mWriter->start(meta.get());
+		}
+		else{
+			ALOGE("recorder split file is invalid ");
+			
+		}
+		
+
+		
+        if(mSplitFd > 0){
+			sleep(3);
+        }else{
+         	sleep(1);
+        }
+       
+    }
+
+	ALOGV("threadFunc  end");
+    
+}
+
+
+//static
+void *PoliceRecorder::ThreadWrapper(void *me) {
+    ALOGV("ThreadWrapper: %p", me);
+    PoliceRecorder *recorder = static_cast<PoliceRecorder *>(me);
+    recorder->threadFunc();
+    return NULL;
+}
+
+
+status_t PoliceRecorder::stopThread(){
+	void *dummy;
+	mThreadStarted = false;
+    pthread_join(mThread, &dummy);
+    status_t err = static_cast<status_t>(reinterpret_cast<uintptr_t>(dummy));
+    return err;
+}
+
+
+status_t PoliceRecorder::createThread(){
+	pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
+
+    
+    mThreadStarted = true;
+    
+    pthread_create(&mThread, &attr, ThreadWrapper, this);
+    pthread_attr_destroy(&attr);
+
+	return OK;
 }
 
 status_t PoliceRecorder::start() {
@@ -893,6 +1020,9 @@ status_t PoliceRecorder::start() {
             sp<MetaData> meta = new MetaData;
             setupMPEG4orWEBMMetaData(&meta);
             status = mWriter->start(meta.get());
+			if(!mThreadStarted){
+				createThread();
+			}
             break;
         }
 
@@ -918,6 +1048,7 @@ status_t PoliceRecorder::start() {
     }
 
     if (status != OK) {
+		ALOGE("start status: %d", status);
         mWriter.clear();
         mWriter = NULL;
     }
@@ -1605,6 +1736,9 @@ status_t PoliceRecorder::setupVideoEncoder(
 	ALOGV("bitrate = %d bps)", mVideoBitRate);
 	ALOGV("mFrameRate = %d fps)", mFrameRate);
 	ALOGV("mIFramesIntervalSec = %d )", mIFramesIntervalSec);
+	ALOGV("mVideoTimeScale = %d )", mVideoTimeScale);
+	ALOGV("mVideoEncoderProfile = %d )", mVideoEncoderProfile);
+	ALOGV("mVideoEncoderLevel = %d )", mVideoEncoderLevel);
 
     if (mVideoTimeScale > 0) {
         format->setInt32("time-scale", mVideoTimeScale);
@@ -1724,6 +1858,64 @@ status_t PoliceRecorder::setupAudioEncoder(const sp<MediaWriter>& writer) {
     return OK;
 }
 
+
+status_t PoliceRecorder::setupMPEG4Recording() {
+
+	//mOutputFd = mSplitOutFd;
+
+	ALOGE("Split setupMPEG4Recording: %d ",mOutputFd);
+
+    mTotalBitRate = 0;
+	//sp<PoliceMPEG4Writer> mMpeg4Writer = dynamic_cast<PoliceMPEG4Writer*> (mWriter);
+	mVideoEncoderSource->setSplitFlag(true);
+	mAudioEncoderSource->setSplitFlag(true);
+    mMpeg4Writer = new PoliceMPEG4Writer(mOutputFd);
+	mMpeg4Writer->addSource(mVideoEncoderSource);
+    mTotalBitRate += mVideoBitRate;
+	mMpeg4Writer->addSource(mAudioEncoderSource);
+	mTotalBitRate += mAudioBitRate;
+	mMpeg4Writer->setSplitFlag(true);
+
+	
+    
+	if (mCaptureFpsEnable) {
+        mMpeg4Writer->setCaptureRate(mCaptureFps);
+
+    }	
+
+	if (mInterleaveDurationUs > 0) {
+        mMpeg4Writer->setInterleaveDuration(mInterleaveDurationUs);
+    }
+	
+    if (mLongitudex10000 > -3600000 && mLatitudex10000 > -3600000) {
+        mMpeg4Writer->setGeoData(mLatitudex10000, mLongitudex10000);
+    }
+
+	if (mMaxFileDurationUs != 0) {
+        mMpeg4Writer->setMaxFileDuration(mMaxFileDurationUs);
+    }
+	
+    if (mMaxFileSizeBytes != 0) {
+        mMpeg4Writer->setMaxFileSize(mMaxFileSizeBytes);
+    }
+	
+    if (mVideoSource == VIDEO_SOURCE_DEFAULT
+            || mVideoSource == VIDEO_SOURCE_CAMERA) {
+        mStartTimeOffsetMs = mEncoderProfiles->getStartTimeOffsetMs(mCameraId);
+    } else if (mVideoSource == VIDEO_SOURCE_SURFACE) {
+        // surface source doesn't need large initial delay
+        mStartTimeOffsetMs = 200;
+    }
+    if (mStartTimeOffsetMs > 0) {
+        mMpeg4Writer->setStartTimeOffsetMs(mStartTimeOffsetMs);
+    }
+	
+    mMpeg4Writer->setListener(mListener);
+    mWriter = mMpeg4Writer;
+    return OK;
+}
+
+
 status_t PoliceRecorder::setupMPEG4orWEBMRecording() {
     mWriter.clear();
     mTotalBitRate = 0;
@@ -1735,7 +1927,7 @@ status_t PoliceRecorder::setupMPEG4orWEBMRecording() {
         writer = new WebmWriter(mOutputFd);
     } else {
         //writer = mp4writer = AVFactory::get()->CreateMPEGa4Writer(mOutputFd);
-        writer = mp4writer = new PoliceMPEG4Writer(mOutputFd);
+        writer = mp4writer = mMpeg4Writer = new PoliceMPEG4Writer(mOutputFd);
 		//mp4writer->setEncryptEnable(mEncrypFlag);
     }
 
@@ -1899,6 +2091,30 @@ status_t PoliceRecorder::resume() {
     return OK;
 }
 
+
+status_t PoliceRecorder::stop(bool flag) {
+    ALOGV("stop %d",flag);
+    status_t err = OK;
+
+    //sp<PoliceMPEG4Writer> mMpeg4Writer = mWriter;
+    //sp<PoliceMPEG4Writer> mMpeg4Writer = sp<dynamic_cast<PoliceMPEG4Writer>> mWriter;
+    //sp<PoliceMPEG4Writer> mMpeg4Writer = sp<static_cast<PoliceMPEG4Writer *>>(&mWriter);
+	
+    if (mWriter != NULL) {
+        err = mMpeg4Writer->stop(flag);
+        mMpeg4Writer.clear();
+		mMpeg4Writer = NULL;
+    }
+    
+    if (mOutputFd >= 0) {
+        ::close(mOutputFd);
+        mOutputFd = -1;
+    }
+
+    return err;
+}
+
+
 status_t PoliceRecorder::stop() {
     ALOGV("stop");
     status_t err = OK;
@@ -1907,6 +2123,10 @@ status_t PoliceRecorder::stop() {
         mCameraSourceTimeLapse->startQuickReadReturns();
         mCameraSourceTimeLapse = NULL;
     }
+
+	if(mThreadStarted){
+		stopThread();
+	}
 
     if (mWriter != NULL) {
         err = mWriter->stop();
@@ -1953,6 +2173,12 @@ status_t PoliceRecorder::reset() {
     ALOGV("reset");
     stop();
 
+	mSplitFd = -1;
+	mThreadStarted = false;
+	mSplitOutFd = -1;
+	//mMpeg4Writer = NULL;
+	mThread = -1;
+	
     // No audio or video source by default
     mAudioSource = AUDIO_SOURCE_CNT;
     mVideoSource = VIDEO_SOURCE_LIST_END;
