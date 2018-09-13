@@ -450,6 +450,8 @@ PoliceMPEG4Writer::PoliceMPEG4Writer(int fd)
         ALOGE("cannot seek mFd: %s (%d)", strerror(errno), errno);
         release();
     }
+
+	mSplitFlag = false;
 }
 
 PoliceMPEG4Writer::~PoliceMPEG4Writer() {
@@ -463,12 +465,6 @@ PoliceMPEG4Writer::~PoliceMPEG4Writer() {
     }
     mTracks.clear();
 }
-
-//status_t MPEG4Writer::setEncryptEnable(bool flag){
-//		ALOGE("setEncryptEnable (%d)", flag);
-//		mEncrptFlag = flag;
-//		return OK;
-//}
 
 
 status_t PoliceMPEG4Writer::dump(
@@ -969,6 +965,7 @@ void PoliceMPEG4Writer::writeCompositionMatrix(int degrees) {
 }
 
 void PoliceMPEG4Writer::release() {
+	ALOGI("release");
     close(mFd);
     mFd = -1;
     mInitCheck = NO_INIT;
@@ -1719,14 +1716,14 @@ void PoliceMPEG4Writer::Track::setTimeScale() {
 void PoliceMPEG4Writer::Track::getCodecSpecificDataFromInputFormatIfPossible() {
     const char *mime;
     CHECK(mMeta->findCString(kKeyMIMEType, &mime));
-	ALOGV("luxun mime=%s", mime);
+	ALOGE("luxun mime=%s", mime);
 
     uint32_t type;
     const void *data = NULL;
     size_t size = 0;
     if (!strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_AVC)) {
         mMeta->findData(kKeyAVCC, &type, &data, &size);
-		ALOGV("luxun video avc type=%d,size=%d", type,(int)size);
+		ALOGE("luxun video avc type=%d,size=%d", type,(int)size);
     } else if (!strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_HEVC)) {
         mMeta->findData(kKeyHVCC, &type, &data, &size);
     } else if (!strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_MPEG4)
@@ -1748,6 +1745,7 @@ void PoliceMPEG4Writer::Track::getCodecSpecificDataFromInputFormatIfPossible() {
 }
 
 PoliceMPEG4Writer::Track::~Track() {
+	ALOGI("release Track");
     stop();
 
     delete mStszTableEntries;
@@ -1767,6 +1765,7 @@ PoliceMPEG4Writer::Track::~Track() {
     mCttsTableEntries = NULL;
 
     if (mCodecSpecificData != NULL) {
+		ALOGI("free mCodecSpecificData");
         free(mCodecSpecificData);
         mCodecSpecificData = NULL;
     }
@@ -2057,7 +2056,13 @@ status_t PoliceMPEG4Writer::Track::stop() {
     mDone = true;
 
     ALOGD("%s track source stopping", mIsAudio? "Audio": "Video");
-    mSource->stop();
+	if(mOwner->mSplitFlag){
+    	ALOGE(" when split ,not stop source");
+		//mOwner->mSplitFlag = false;
+	}
+	else{
+		mSource->stop();
+	}
     ALOGD("%s track source stopped", mIsAudio? "Audio": "Video");
 
     void *dummy;
@@ -2158,7 +2163,7 @@ status_t PoliceMPEG4Writer::Track::copyCodecSpecificData(
     }
     mCodecSpecificDataSize = size;
     memcpy(mCodecSpecificData, data, size);
-	ALOGV("luxun copyCodecSpecificData start %d,size=%d",mIsAudio,(int)mCodecSpecificDataSize);
+	ALOGE("luxun copyCodecSpecificData start %d,size=%d",mIsAudio,(int)mCodecSpecificDataSize);
 
 	uint8_t * header = (uint8_t *)mCodecSpecificData;
 	for(int i=0;i<(int)mCodecSpecificDataSize;i++){
@@ -2525,23 +2530,27 @@ status_t PoliceMPEG4Writer::Track::threadEntry() {
                 ALOGI("ignoring additional CSD for video track after first frame");
             } else {
                 mMeta = mSource->getFormat(); // get output format after format change
-
-                if (mIsAvc) {
-                    status_t err = makeAVCCodecSpecificData(
-                            (const uint8_t *)buffer->data()
-                                + buffer->range_offset(),
-                            buffer->range_length());
-                    CHECK_EQ((status_t)OK, err);
-                } else if (mIsHevc) {
-                    status_t err = makeHEVCCodecSpecificData(
-                            (const uint8_t *)buffer->data()
-                                + buffer->range_offset(),
-                            buffer->range_length());
-                    CHECK_EQ((status_t)OK, err);
-                } else if (mIsMPEG4) {
-                    copyCodecSpecificData((const uint8_t *)buffer->data() + buffer->range_offset(),
-                            buffer->range_length());
-                }
+				if(!mOwner->mSplitFlag){
+	                if (mIsAvc) {
+						ALOGI("makeAVCCodecSpecificData");
+	                    status_t err = makeAVCCodecSpecificData(
+	                            (const uint8_t *)buffer->data()
+	                                + buffer->range_offset(),
+	                            buffer->range_length());
+	                    CHECK_EQ((status_t)OK, err);
+	                } else if (mIsHevc) {
+						ALOGI("makeHEVCCodecSpecificData");
+	                    status_t err = makeHEVCCodecSpecificData(
+	                            (const uint8_t *)buffer->data()
+	                                + buffer->range_offset(),
+	                            buffer->range_length());
+	                    CHECK_EQ((status_t)OK, err);
+	                } else if (mIsMPEG4) {
+						ALOGI("copyCodecSpecificData  when Audio");
+	                    copyCodecSpecificData((const uint8_t *)buffer->data() + buffer->range_offset(),
+	                            buffer->range_length());
+	                }
+				}
             }
 
             if (!mIsAudio) {
@@ -2579,10 +2588,10 @@ status_t PoliceMPEG4Writer::Track::threadEntry() {
         }
 
 		if(mOwner->mEncrptFlag){
-				ALOGE("luxun Video Source output size=%d",(int)copy->size());
+				ALOGV("luxun Video Source output size=%d",(int)copy->size());
 				uint8_t* dataStart = (uint8_t*)copy->data();
 				for(int i=0;i<16;i++){
-					ALOGE("%02x %02x %02x %02x",dataStart[i],dataStart[i+1],dataStart[i+2],dataStart[i+3]);
+					ALOGV("%02x %02x %02x %02x",dataStart[i],dataStart[i+1],dataStart[i+2],dataStart[i+3]);
 					i=i+3;
 				}
 				//00 00 00 01
@@ -2608,14 +2617,14 @@ status_t PoliceMPEG4Writer::Track::threadEntry() {
 					}
 				}
 				else if(mIsAudio){
-					ALOGE("luxun Audio Source output size=%d",(int)copy->size());
+					ALOGV("luxun Audio Source output size=%d",(int)copy->size());
 					if(copy->size() > 48){
 							mOwner->myAes->cipher(EncryptKey, 32, dataStart, 16, dataStart);
 					}
 				}
 				dataStart = (uint8_t*)copy->data();
 				for(int i=0;i<16;i++){
-					ALOGE("%02x %02x %02x %02x",dataStart[i],dataStart[i+1],dataStart[i+2],dataStart[i+3]);
+					ALOGV("%02x %02x %02x %02x",dataStart[i],dataStart[i+1],dataStart[i+2],dataStart[i+3]);
 					i=i+3;
 				}
 		}
@@ -2648,7 +2657,7 @@ status_t PoliceMPEG4Writer::Track::threadEntry() {
                     mOwner->mMaxFileDurationLimitUs);
             mOwner->notify(MEDIA_RECORDER_EVENT_INFO, MEDIA_RECORDER_INFO_MAX_DURATION_REACHED, 0);
             copy->release();
-            mSource->stop();
+            //mSource->stop();
             break;
         }
 
@@ -2668,18 +2677,30 @@ status_t PoliceMPEG4Writer::Track::threadEntry() {
         if (mResumed) {
             int64_t durExcludingEarlierPausesUs = timestampUs - previousPausedDurationUs;
             if (WARN_UNLESS(durExcludingEarlierPausesUs >= 0ll, "for %s track", trackName)) {
-                copy->release();
-                mSource->stop();
-                mIsMalformed = true;
-                break;
+				ALOGE("Source Stop 6");
+				if(mOwner->mSplitFlag){
+	            
+        		}
+				else{
+	                copy->release();
+	                mSource->stop();
+	                mIsMalformed = true;
+	                break;
+				}
             }
 
             int64_t pausedDurationUs = durExcludingEarlierPausesUs - mTrackDurationUs;
             if (WARN_UNLESS(pausedDurationUs >= lastDurationUs, "for %s track", trackName)) {
-                copy->release();
-                mSource->stop();
-                mIsMalformed = true;
-                break;
+				ALOGE("Source Stop 5");
+				if(mOwner->mSplitFlag){
+	            	
+        		}
+				else{
+	                copy->release();
+	                mSource->stop();
+	                mIsMalformed = true;
+	                break;
+				}
             }
 
             previousPausedDurationUs += pausedDurationUs - lastDurationUs;
@@ -2688,10 +2709,16 @@ status_t PoliceMPEG4Writer::Track::threadEntry() {
 
         timestampUs -= previousPausedDurationUs;
         if (WARN_UNLESS(timestampUs >= 0ll, "for %s track", trackName)) {
-            copy->release();
-            mSource->stop();
-            mIsMalformed = true;
-            break;
+			ALOGE("Source Stop 4");
+			if(mOwner->mSplitFlag){
+	            
+        	}
+			else{
+	            copy->release();
+	            mSource->stop();
+	            mIsMalformed = true;
+	            break;
+			}
         }
 
         if (!mIsAudio) {
@@ -2720,10 +2747,16 @@ status_t PoliceMPEG4Writer::Track::threadEntry() {
                 cttsOffsetTimeUs = 0;
             }
             if (WARN_UNLESS(cttsOffsetTimeUs >= 0ll, "for %s track", trackName)) {
-                copy->release();
-                mSource->stop();
-                mIsMalformed = true;
-                break;
+				ALOGE("Source Stop 3");
+				if(mOwner->mSplitFlag){
+	            
+        		}
+				else{
+	                copy->release();
+	                mSource->stop();
+	                mIsMalformed = true;
+	                break;
+				}
             }
 
             timestampUs = decodingTimeUs;
@@ -2734,10 +2767,16 @@ status_t PoliceMPEG4Writer::Track::threadEntry() {
             currCttsOffsetTimeTicks =
                     (cttsOffsetTimeUs * mTimeScale + 500000LL) / 1000000LL;
             if (WARN_UNLESS(currCttsOffsetTimeTicks <= 0x0FFFFFFFFLL, "for %s track", trackName)) {
-                copy->release();
-                mSource->stop();
-                mIsMalformed = true;
-                break;
+				ALOGE("Source Stop 1");
+				if(mOwner->mSplitFlag){
+	            
+        		}
+				else{
+	                copy->release();
+	                mSource->stop();
+	                mIsMalformed = true;
+	                break;
+				}
             }
 
             if (mStszTableEntries->count() == 0) {
@@ -2776,14 +2815,20 @@ status_t PoliceMPEG4Writer::Track::threadEntry() {
         }
 
         if (WARN_UNLESS(timestampUs >= 0ll, "for %s track", trackName)) {
-            copy->release();
-            mSource->stop();
-            mIsMalformed = true;
-            break;
+			ALOGE("Source Stop 2");
+			if(mOwner->mSplitFlag){
+	            
+        	}
+			else{
+	            copy->release();
+	            mSource->stop();
+	            mIsMalformed = true;
+	            break;
+			}
         }
 
-        //ALOGV("%s media time stamp: %" PRId64 " and previous paused duration %" PRId64,
-        //        trackName, timestampUs, previousPausedDurationUs);
+        ALOGV("%s media time stamp: %" PRId64 " and previous paused duration %" PRId64,
+                trackName, timestampUs, previousPausedDurationUs);
         if (timestampUs > mTrackDurationUs) {
             mTrackDurationUs = timestampUs;
         }
@@ -2799,10 +2844,15 @@ status_t PoliceMPEG4Writer::Track::threadEntry() {
         if (currDurationTicks < 0ll) {
             ALOGE("do not support out of order frames (timestamp: %lld < last: %lld for %s track",
                     (long long)timestampUs, (long long)lastTimestampUs, trackName);
-            copy->release();
-            mSource->stop();
-            mIsMalformed = true;
-            break;
+			if(mOwner->mSplitFlag){
+	            
+        	}
+			else{
+				copy->release();
+	            mSource->stop();
+	            mIsMalformed = true;
+	            break;
+			}
         }
 
         // if the duration is different for this sample, see if it is close enough to the previous
@@ -2840,8 +2890,8 @@ status_t PoliceMPEG4Writer::Track::threadEntry() {
             }
             previousSampleSize = sampleSize;
         }
-        //ALOGV("%s timestampUs/lastTimestampUs: %" PRId64 "/%" PRId64,
-        //        trackName, timestampUs, lastTimestampUs);
+        ALOGV("%s timestampUs/lastTimestampUs: %" PRId64 "/%" PRId64,
+                trackName, timestampUs, lastTimestampUs);
         lastDurationUs = timestampUs - lastTimestampUs;
         lastDurationTicks = currDurationTicks;
         lastTimestampUs = timestampUs;
