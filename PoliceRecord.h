@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009 The Android Open Source Project
+ * Copyright (C) 2014 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,227 +14,158 @@
  * limitations under the License.
  */
 
-#ifndef POLICE_RECORDER_H_
+#ifndef PoliceMediaCodecSource_H_
+#define PoliceMediaCodecSource_H_
 
-#define POLICE_RECORDER_H_
-
-#include <media/MediaRecorderBase.h>
-#include <camera/CameraParameters.h>
-#include <utils/String8.h>
+#include <media/stagefright/foundation/ABase.h>
+#include <media/stagefright/foundation/AHandlerReflector.h>
+#include <media/stagefright/foundation/Mutexed.h>
 #include <media/stagefright/MediaSource.h>
-#include <system/audio.h>
-#include <utils/threads.h>
 
-
-#include <MetadataBufferType.h>
+#include <gui/IGraphicBufferConsumer.h>
 
 namespace android {
 
-class Camera;
-class ICameraRecordingProxy;
-class CameraSource;
-class CameraSourceTimeLapse;
-struct PoliceMediaCodecSource;
-struct MediaSource;
-struct MediaWriter;
-class MetaData;
-struct AudioSource;
-class MediaProfiles;
-class IGraphicBufferConsumer;
-class IGraphicBufferProducer;
-class SurfaceMediaSource;
 struct ALooper;
 struct AMessage;
+struct AReplyToken;
+class IGraphicBufferProducer;
+struct MediaCodec;
+class MetaData;
 
+struct PoliceMediaCodecSource : public MediaSource,
+                          public MediaBufferObserver {
+    enum FlagBits {
+        FLAG_USE_SURFACE_INPUT      = 1,
+        FLAG_USE_METADATA_INPUT     = 2,
+        FLAG_PREFER_SOFTWARE_CODEC  = 4,  // used for testing only
+    };
 
-struct PoliceRecorder : public MediaRecorderBase {
-    PoliceRecorder(const String16 &opPackageName);
-    virtual ~PoliceRecorder();
+    static sp<PoliceMediaCodecSource> Create(
+            const sp<ALooper> &looper,
+            const sp<AMessage> &format,
+            const sp<MediaSource> &source,
+            const sp<IGraphicBufferConsumer> &consumer = NULL,
+            uint32_t flags = 0);
 
-    virtual status_t init();
-    virtual status_t setAudioSource(audio_source_t as);
-    virtual status_t setVideoSource(video_source vs);
-    virtual status_t setOutputFormat(output_format of);
-    virtual status_t setAudioEncoder(audio_encoder ae);
-    virtual status_t setVideoEncoder(video_encoder ve);
-    virtual status_t setVideoSize(int width, int height);
-    virtual status_t setVideoFrameRate(int frames_per_second);
-    virtual status_t setCamera(const sp<hardware::ICamera>& camera, const sp<ICameraRecordingProxy>& proxy);
-    virtual status_t setPreviewSurface(const sp<IGraphicBufferProducer>& surface);
-    virtual status_t setInputSurface(const sp<IGraphicBufferConsumer>& surface);
-    virtual status_t setOutputFile(int fd, int64_t offset, int64_t length);
-    virtual status_t setParameters(const String8& params);
-    virtual status_t setListener(const sp<IMediaRecorderClient>& listener);
-    virtual status_t setClientName(const String16& clientName);
-    virtual status_t prepare();
-    virtual status_t start();
-    virtual status_t pause();
-    virtual status_t resume();
+    bool isVideo() const { return mIsVideo; }
+    sp<IGraphicBufferProducer> getGraphicBufferProducer();
+    status_t setInputBufferTimeOffset(int64_t timeOffsetUs);
+    int64_t getFirstSampleSystemTimeUs();
+
+    // MediaSource
+    virtual status_t start(MetaData *params = NULL);
     virtual status_t stop();
-    virtual status_t close();
-	virtual status_t reset();
-	virtual status_t setEncryptEnable(int flag,int value);
-    virtual status_t getMaxAmplitude(int *max);
-    virtual status_t dump(int fd, const Vector<String16>& args) const;
-    // Querying a SurfaceMediaSourcer
-    virtual sp<IGraphicBufferProducer> querySurfaceMediaSource() const;
-public:
-	status_t setCamera();
-	
-private:
-	status_t stop(bool flag);
-	void threadFunc(); 
-	static void *ThreadWrapper(void *me); 
-	status_t stopThread();
-	status_t createThread();	
-	status_t setupMPEG4Recording();
+    virtual status_t pause();
+    virtual sp<MetaData> getFormat();
+    virtual status_t read(
+            MediaBuffer **buffer,
+            const ReadOptions *options = NULL);
+
+    // MediaBufferObserver
+    virtual void signalBufferReturned(MediaBuffer *buffer);
+
+    // for AHandlerReflector
+    void onMessageReceived(const sp<AMessage> &msg);
 
 protected:
-    sp<hardware::ICamera> mCamera;
-    sp<ICameraRecordingProxy> mCameraProxy;
-    sp<IGraphicBufferProducer> mPreviewSurface;
-    sp<IGraphicBufferConsumer> mPersistentSurface;
-    sp<IMediaRecorderClient> mListener;
-    String16 mClientName;
-    uid_t mClientUid;
-    pid_t mClientPid;
-    sp<MediaWriter> mWriter;
-    int mOutputFd;
-    sp<AudioSource> mAudioSourceNode;
+    virtual ~PoliceMediaCodecSource();
 
-    audio_source_t mAudioSource;
-    video_source mVideoSource;
-    output_format mOutputFormat;
-    audio_encoder mAudioEncoder;
-    video_encoder mVideoEncoder;
-    bool mUse64BitFileOffset;
-    int32_t mVideoWidth, mVideoHeight;
-    int32_t mFrameRate;
-    int32_t mVideoBitRate;
-    int32_t mAudioBitRate;
-    int32_t mAudioChannels;
-    int32_t mSampleRate;
-    int32_t mInterleaveDurationUs;
-    int32_t mIFramesIntervalSec;
-    int32_t mCameraId;
-    int32_t mVideoEncoderProfile;
-    int32_t mVideoEncoderLevel;
-    int32_t mMovieTimeScale;
-    int32_t mVideoTimeScale;
-    int32_t mAudioTimeScale;
-    int64_t mMaxFileSizeBytes;
-    int64_t mMaxFileDurationUs;
-    int64_t mTrackEveryTimeDurationUs;
-    int32_t mRotationDegrees;  // Clockwise
-    int32_t mLatitudex10000;
-    int32_t mLongitudex10000;
-    int32_t mStartTimeOffsetMs;
-    int32_t mTotalBitRate;
+public:
+void setPreRecord(bool value);
+void setSplitFlag(bool splitFlag);
+void setPreRecordDuration(int durationTime);
 
-	bool mEncrypFlag;
-    bool mCaptureFpsEnable;
-    float mCaptureFps;
-    int64_t mTimeBetweenCaptureUs;
-    sp<CameraSourceTimeLapse> mCameraSourceTimeLapse;
+private:
+    struct Puller;
 
-    String8 mParams;
+    enum {
+        kWhatPullerNotify,
+        kWhatEncoderActivity,
+        kWhatStart,
+        kWhatStop,
+        kWhatPause,
+        kWhatSetInputBufferTimeOffset,
+        kWhatGetFirstSampleSystemTimeUs,
+        kWhatStopStalled,
+    };
 
-    MetadataBufferType mMetaDataStoredInVideoBuffers;
-    MediaProfiles *mEncoderProfiles;
+    PoliceMediaCodecSource(
+            const sp<ALooper> &looper,
+            const sp<AMessage> &outputFormat,
+            const sp<MediaSource> &source,
+            const sp<IGraphicBufferConsumer> &consumer,
+            uint32_t flags = 0);
 
-    int64_t mPauseStartTimeUs;
-    int64_t mTotalPausedDurationUs;
-    sp<PoliceMediaCodecSource> mAudioEncoderSource;
-    sp<PoliceMediaCodecSource> mVideoEncoderSource;
+    status_t onStart(MetaData *params);
+    void onPause();
+    status_t init();
+    status_t initEncoder();
+    void releaseEncoder();
+    status_t feedEncoderInputBuffers();
+    void suspend();
+    void resume(int64_t skipFramesBeforeUs = -1ll);
+    void signalEOS(status_t err = ERROR_END_OF_STREAM);
+    bool reachedEOS();
+    status_t postSynchronouslyAndReturnError(const sp<AMessage> &msg);
 
-    bool mStarted;
-	bool mPreRecord;
-
-	//sp<PoliceMPEG4Writer> mMpeg4Writer;
-	int32_t mSplitFd;
-	bool    mThreadStarted;
-	pthread_t       mThread;
-	int32_t mSplitOutFd;
-	//bool mPreRecordStart;
-    // Needed when GLFrames are encoded.
-    // An <IGraphicBufferProducer> pointer
-    // will be sent to the client side using which the
-    // frame buffers will be queued and dequeued
-    sp<IGraphicBufferProducer> mGraphicBufferProducer;
     sp<ALooper> mLooper;
+    sp<ALooper> mCodecLooper;
+    sp<AHandlerReflector<PoliceMediaCodecSource> > mReflector;
+    sp<AMessage> mOutputFormat;
+    Mutexed<sp<MetaData>> mMeta;
+    sp<Puller> mPuller;
+    sp<MediaCodec> mEncoder;
+    uint32_t mFlags;
+    List<sp<AReplyToken>> mStopReplyIDQueue;
+    bool mIsVideo;
+    bool mStarted;
+    bool mStopping;
+    bool mDoMoreWorkPending;
+    bool mSetEncoderFormat;
+    int32_t mEncoderFormat;
+    int32_t mEncoderDataSpace;
+    sp<AMessage> mEncoderActivityNotify;
+    sp<IGraphicBufferProducer> mGraphicBufferProducer;
+    sp<IGraphicBufferConsumer> mGraphicBufferConsumer;
+    List<MediaBuffer *> mInputBufferQueue;
+    List<size_t> mAvailEncoderInputIndices;
+    List<int64_t> mDecodingTimeQueue; // decoding time (us) for video
+    int64_t mInputBufferTimeOffsetUs;
+    int64_t mFirstSampleSystemTimeUs;
+    bool mPausePending;
 
-    static const int kMaxHighSpeedFps = 1000;
+    // audio drift time
+    int64_t mFirstSampleTimeUs;
+    List<int64_t> mDriftTimeQueue;
 
-    virtual status_t prepareInternal();
-	
-    status_t setupMPEG4orWEBMRecording();
-    void setupMPEG4orWEBMMetaData(sp<MetaData> *meta);
-    status_t setupAMRRecording();
-    status_t setupAACRecording();
-    status_t setupRawAudioRecording();
-    status_t setupRTPRecording();
-    status_t setupMPEG2TSRecording();
-    sp<PoliceMediaCodecSource> createAudioSource();
-    status_t checkVideoEncoderCapabilities();
-    status_t checkAudioEncoderCapabilities();
-    // Generic MediaSource set-up. Returns the appropriate
-    // source (CameraSource or SurfaceMediaSource)
-    // depending on the videosource type
-    status_t setupMediaSource(sp<MediaSource> *mediaSource);
-    status_t setupCameraSource(sp<CameraSource> *cameraSource);
-    status_t setupAudioEncoder(const sp<MediaWriter>& writer);
-    status_t setupVideoEncoder(sp<MediaSource> cameraSource, sp<PoliceMediaCodecSource> *source);
-    virtual void setupCustomVideoEncoderParams(sp<MediaSource> /*cameraSource*/,
-            sp<AMessage> &/*format*/) {}
+    struct Output {
+        Output();
+        List<MediaBuffer*> mBufferQueue;
+        bool mEncoderReachedEOS;
+        status_t mErrorCode;
+        Condition mCond;
+    };
+    Mutexed<Output> mOutput;
+	Mutexed<Output> mIframeOutput;
 
-    // Encoding parameter handling utilities
-    status_t setParameter(const String8 &key, const String8 &value);
-    status_t setParamAudioEncodingBitRate(int32_t bitRate);
-    status_t setParamAudioNumberOfChannels(int32_t channles);
-    status_t setParamAudioSamplingRate(int32_t sampleRate);
-    status_t setParamAudioTimeScale(int32_t timeScale);
-    status_t setParamCaptureFpsEnable(int32_t timeLapseEnable);
-    status_t setParamCaptureFps(float fps);
-    status_t setParamVideoEncodingBitRate(int32_t bitRate);
-    status_t setParamVideoIFramesInterval(int32_t seconds);
-    status_t setParamVideoEncoderProfile(int32_t profile);
-    status_t setParamVideoEncoderLevel(int32_t level);
-    status_t setParamVideoCameraId(int32_t cameraId);
-    status_t setParamVideoTimeScale(int32_t timeScale);
-    status_t setParamVideoRotation(int32_t degrees);
-    status_t setParamTrackTimeStatus(int64_t timeDurationUs);
-    status_t setParamInterleaveDuration(int32_t durationUs);
-    status_t setParam64BitFileOffset(bool use64BitFileOffset);
-    status_t setParamMaxFileDurationUs(int64_t timeUs);
-    status_t setParamMaxFileSizeBytes(int64_t bytes);
-    status_t setParamMovieTimeScale(int32_t timeScale);
-    status_t setParamGeoDataLongitude(int64_t longitudex10000);
-    status_t setParamGeoDataLatitude(int64_t latitudex10000);
-    void clipVideoBitRate();
-    void clipVideoFrameRate();
-    void clipVideoFrameWidth();
-    void clipVideoFrameHeight();
-    void clipAudioBitRate();
-    void clipAudioSampleRate();
-    void clipNumberOfAudioChannels();
-    void setDefaultProfileIfNecessary();
-    void setDefaultVideoEncoderIfNecessary();
-	//add new interface
-	
-    virtual status_t handleCustomOutputFormats() {return UNKNOWN_ERROR;}
-    virtual status_t handleCustomRecording() {return UNKNOWN_ERROR;}
-    virtual status_t handleCustomAudioSource(sp<AMessage> /*format*/) {return UNKNOWN_ERROR;}
-    virtual status_t handleCustomAudioEncoder() {return UNKNOWN_ERROR;}
-    virtual sp<MediaSource> setPCMRecording() {return NULL;}
+    int32_t mGeneration;
 
-	
-	
+	MediaBuffer* mFirstBuffer;
+	MediaBuffer* mSplitBuffer;
+	bool mfirstFlag;
+	bool mfirstVideoFlag;
+	int64_t mFirstVideoTimeUs;
+	bool mPreRecord;
+	bool mSplitFlag;
+	bool mfirstSplitFlag;
+	bool mfirstSplitDataFlag;
+	int32_t mVideoPreRecordMemoryCount;
+	int32_t mAudioPreRecordMemoryCount;
 
-    PoliceRecorder(const PoliceRecorder &);
-    PoliceRecorder &operator=(const PoliceRecorder &);
+    DISALLOW_EVIL_CONSTRUCTORS(PoliceMediaCodecSource);
 };
 
-}  // namespace android
+} // namespace android
 
-#endif  // STAGEFRIGHT_RECORDER_H_
-
+#endif /* MediaCodecSource_H_ */
