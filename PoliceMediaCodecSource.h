@@ -147,6 +147,7 @@ private:
         Condition mCond;
     };
     Mutexed<Output> mOutput;
+	Mutexed<Output> mIframeOutput;
 
     int32_t mGeneration;
 
