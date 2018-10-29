@@ -2057,8 +2057,11 @@ status_t PoliceMPEG4Writer::Track::stop() {
 
     ALOGD("%s track source stopping", mIsAudio? "Audio": "Video");
 	if(mOwner->mSplitFlag){
-    	ALOGE(" when split ,not stop source");
+    	ALOGE(" when split ,not stop video source");
 		//mOwner->mSplitFlag = false;
+		if(mIsAudio){
+			mSource->stop();
+		}
 	}
 	else{
 		mSource->stop();
@@ -2530,7 +2533,7 @@ status_t PoliceMPEG4Writer::Track::threadEntry() {
                 ALOGI("ignoring additional CSD for video track after first frame");
             } else {
                 mMeta = mSource->getFormat(); // get output format after format change
-				if(!mOwner->mSplitFlag){
+				if(!mOwner->mSplitFlag || mIsAudio){
 	                if (mIsAvc) {
 						ALOGI("makeAVCCodecSpecificData");
 	                    status_t err = makeAVCCodecSpecificData(
@@ -2653,12 +2656,17 @@ status_t PoliceMPEG4Writer::Track::threadEntry() {
             break;
         }
         if (mOwner->exceedsFileDurationLimit()) {
-            ALOGW("Recorded file duration exceeds limit %" PRId64 "microseconds",
-                    mOwner->mMaxFileDurationLimitUs);
-            mOwner->notify(MEDIA_RECORDER_EVENT_INFO, MEDIA_RECORDER_INFO_MAX_DURATION_REACHED, 0);
-            copy->release();
-            //mSource->stop();
-            break;
+
+			int32_t isvideoSync = false;
+        	meta_data->findInt32(kKeyIsSyncFrame, &isvideoSync);
+		    if(isvideoSync && !mIsAudio){
+	            ALOGW("Recorded file duration exceeds limit %" PRId64 "microseconds",
+	                    mOwner->mMaxFileDurationLimitUs);
+	            mOwner->notify(MEDIA_RECORDER_EVENT_INFO, MEDIA_RECORDER_INFO_MAX_DURATION_REACHED, 0);
+	            copy->release();
+	            //mSource->stop();
+	            break;
+		    }
         }
 
 
