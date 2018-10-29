@@ -410,6 +410,7 @@ status_t PoliceMediaCodecSource::read(
 				if(mIsVideo){
 					if(mfirstVideoFlag){
 						mfirstVideoFlag = false;
+						//find the first I frame
 						for (List<MediaBuffer*>::iterator it = output->mBufferQueue.begin();it != output->mBufferQueue.end();) {
 							int32_t iFrame = 0;
 							
@@ -420,82 +421,125 @@ status_t PoliceMediaCodecSource::read(
         						
 								break;
 							}else{
-								ALOGV("video delete numberId=%d,timeUs=(%.3f secs),datasize=%d",numberId,timestampUs / 1E6,(int)((*it)->range_length()));
+								ALOGV("video delete preRecord numberId=%d,timeUs=(%.3f secs),datasize=%d",numberId,timestampUs / 1E6,(int)((*it)->range_length()));
                 				(*it)->release();
 								it = output->mBufferQueue.erase(it);
 							}
             			}
+
+						//delete split I frame 
+						Mutexed<Output>::Locked iframeoutput(mIframeOutput);
+						for (List<MediaBuffer*>::iterator it = iframeoutput->mBufferQueue.begin();it != iframeoutput->mBufferQueue.end();) {
+
+								if((*it) != NULL){
+									ALOGV("preRecord first video delete split I frame datasize=%d",(int)((*it)->range_length()));
+	                				(*it)->release();
+									it = iframeoutput->mBufferQueue.erase(it);
+									ALOGV("preRecord first video delete split I frame datasize=%d",(int)(iframeoutput->mBufferQueue.size()));
+								}
+            			}
+						
 						mFirstVideoTimeUs = timestampUs;
 						*buffer = *output->mBufferQueue.begin();
 						(*buffer)->meta_data()->findInt32(kKeyNumberID, &numberId);
 						(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
 						(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
-						ALOGV("video add Iframe numberId=%d,firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",numberId,mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
+						ALOGV("preRecord video add I frame numberId=%d,firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",numberId,mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
 						output->mBufferQueue.erase(output->mBufferQueue.begin());
 					}
 					else{
 						if(mSplitFlag){
-							//if(mfirstSplitFlag){
-							//	mfirstSplitFlag = false;
-							//	*buffer = mSplitBuffer;
-							//	ALOGV("read splitBuffer 1,datasize=%d",(int)((*buffer)->range_length()));
-							//	return OK;
-							//}
-							//else{
-								if(mfirstSplitDataFlag){
-									mfirstSplitDataFlag = false;
-									*buffer = *output->mBufferQueue.begin();
-									(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
-									mFirstVideoTimeUs = timestampUs;
-									(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
-									(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
-									ALOGI("read splitBuffer 1,source=%s,datasize=%d",mIsVideo?"Video":"Audio",(int)((*buffer)->range_length()));
-								}
-								else{
-									*buffer = *output->mBufferQueue.begin();
-									(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
-									(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
-									(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
-									ALOGV("split firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
-								}
+							if(mfirstSplitFlag){
+								mfirstSplitFlag = false;
+								Mutexed<Output>::Locked iframeoutput(mIframeOutput);
+								//*buffer = mSplitBuffer;
+								*buffer = *iframeoutput->mBufferQueue.begin();
+								(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+								mFirstVideoTimeUs = timestampUs;
+								(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
+								(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
+								ALOGV("preRecord read video splitBuffer 1,datasize=%d",(int)((*buffer)->range_length()));
+
+								iframeoutput->mBufferQueue.erase(iframeoutput->mBufferQueue.begin());
+								//delete split I frame
+								for (List<MediaBuffer*>::iterator it = iframeoutput->mBufferQueue.begin();it != iframeoutput->mBufferQueue.end();) {
+
+									if((*it) != NULL){
+										ALOGV("preRecord video delete split I frame datasize=%d",(int)((*it)->range_length()));
+		                				(*it)->release();
+										it = iframeoutput->mBufferQueue.erase(it);
+										ALOGV("preRecord video delete split I frame datasize=%d",(int)(iframeoutput->mBufferQueue.size()));
+									}
+		            			}
+								return OK;
+							}
+							else{
+								
+								*buffer = *output->mBufferQueue.begin();
+								(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+								(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
+								(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
+								ALOGV("preRecord split video firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
 								output->mBufferQueue.erase(output->mBufferQueue.begin());
-							//}
+
+								int32_t isvideoSync = false;
+		        				(*buffer)->meta_data()->findInt32(kKeyIsSyncFrame, &isvideoSync);
+								ALOGV("preRecord check video delete split I frame isvideoSync=%d",isvideoSync);
+								if(isvideoSync){
+									Mutexed<Output>::Locked iframeoutput(mIframeOutput);
+									if(iframeoutput->mBufferQueue.size() >= 2){
+										MediaBuffer* tmpbuf = *iframeoutput->mBufferQueue.begin();
+										iframeoutput->mBufferQueue.erase(iframeoutput->mBufferQueue.begin());
+									    ALOGV("preRecord video delete split I frame queueSize=%d,datasize=%d",(int)(iframeoutput->mBufferQueue.size()),(int)((tmpbuf)->range_length()));
+										tmpbuf->release();
+									}
+								}
+							}
 						}else{
 							*buffer = *output->mBufferQueue.begin();
 							(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
 							(*buffer)->meta_data()->findInt32(kKeyNumberID, &numberId);
 							(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
 							(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
-							ALOGV("video add numberId=%d,firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",numberId,mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
+							ALOGV("preRecord video add numberId=%d,firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",numberId,mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
 							output->mBufferQueue.erase(output->mBufferQueue.begin());
+
+							int32_t isvideoSync = false;
+							(*buffer)->meta_data()->findInt32(kKeyIsSyncFrame, &isvideoSync);
+							ALOGV("check preRecord video delete split I frame isvideoSync=%d",isvideoSync);
+							if(isvideoSync){
+								Mutexed<Output>::Locked iframeoutput(mIframeOutput);
+								if(iframeoutput->mBufferQueue.size() >= 2){
+									MediaBuffer* tmpbuf = *iframeoutput->mBufferQueue.begin();
+									iframeoutput->mBufferQueue.erase(iframeoutput->mBufferQueue.begin());
+								    ALOGV("preRecord video not split delete I frame queueSize=%d,datasize=%d",(int)(iframeoutput->mBufferQueue.size()),(int)((tmpbuf)->range_length()));
+									tmpbuf->release();
+								}
+							}
 						}
 					}
 				}
 				else{
 					if(mSplitFlag){
-						//if(mfirstSplitFlag){
-						//	mfirstSplitFlag = false;
-						//	*buffer = mSplitBuffer;
-						//	ALOGV("read splitBuffer 2,datasize=%d",(int)((*buffer)->range_length()));
-						//	return OK;
-						//}
-						//else{
-							if(mfirstSplitDataFlag){
-								mfirstSplitDataFlag = false;
-								*buffer = *output->mBufferQueue.begin();
-								(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
-								mFirstVideoTimeUs = timestampUs;
-								(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
-								ALOGI("read splitBuffer 2,source=%s,datasize=%d",mIsVideo?"Video":"Audio",(int)((*buffer)->range_length()));
-							}
-							else{
-								*buffer = *output->mBufferQueue.begin();
-								(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
-								(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
-								ALOGV("split 22 firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
-							}
-							output->mBufferQueue.erase(output->mBufferQueue.begin());
-						//}
+						if(mfirstSplitFlag){
+							mfirstSplitFlag = false;
+							*buffer = *output->mBufferQueue.begin();
+						    (*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+							mFirstVideoTimeUs = timestampUs;
+							(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
+							ALOGV("read audio splitBuffer 2,datasize=%d",(int)((*buffer)->range_length()));
+		
+						}
+						else{
+							
+							*buffer = *output->mBufferQueue.begin();
+							(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+							(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
+							if(mIsVideo)
+							(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
+							ALOGV("split audio 22 firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
+						}
+						output->mBufferQueue.erase(output->mBufferQueue.begin());
 					}
 					else{
 				
@@ -519,38 +563,95 @@ status_t PoliceMediaCodecSource::read(
 		}
 		else{
 			if(mSplitFlag){
-				//if(mfirstSplitFlag){
-				//	mfirstSplitFlag = false;
-				//	*buffer = mSplitBuffer;
-				//	ALOGV("read splitBuffer 3,datasize=%d",(int)((*buffer)->range_length()));
-				//	return OK;
-				//}
-				//else{
-					if(mfirstSplitDataFlag){
-						mfirstSplitDataFlag = false;
+				if(mIsVideo){
+					if(mfirstSplitFlag){
+						mfirstSplitFlag = false;
+						//*buffer = mSplitBuffer;
+						Mutexed<Output>::Locked iframeoutput(mIframeOutput);
+						*buffer = *iframeoutput->mBufferQueue.begin();
+						(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+						mFirstVideoTimeUs = timestampUs;
+						(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
+						(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
+						ALOGV("read video splitBuffer 3,datasize=%d",(int)((*buffer)->range_length()));
+						
+						iframeoutput->mBufferQueue.erase(iframeoutput->mBufferQueue.begin());
+						
+						for (List<MediaBuffer*>::iterator it = iframeoutput->mBufferQueue.begin();it != iframeoutput->mBufferQueue.end();) {
+
+								if((*it) != NULL){
+									ALOGV("video delete split I frame datasize=%d",(int)((*it)->range_length()));
+	                				(*it)->release();
+									it = iframeoutput->mBufferQueue.erase(it);
+									ALOGV("video delete split I frame datasize=%d",(int)(iframeoutput->mBufferQueue.size()));
+								}
+            			}
+						
+						return OK;
+					}
+					else{
+						
+						*buffer = *output->mBufferQueue.begin();
+						(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
+						(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
+						(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
+						ALOGV("split video 33 firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
+					
+						output->mBufferQueue.erase(output->mBufferQueue.begin());
+
+						int32_t isvideoSync = false;
+        				(*buffer)->meta_data()->findInt32(kKeyIsSyncFrame, &isvideoSync);
+						ALOGV("check video delete split I frame isvideoSync=%d",isvideoSync);
+						if(isvideoSync){
+							Mutexed<Output>::Locked iframeoutput(mIframeOutput);
+							if(iframeoutput->mBufferQueue.size() >= 2){
+								MediaBuffer* tmpbuf = *iframeoutput->mBufferQueue.begin();
+								iframeoutput->mBufferQueue.erase(iframeoutput->mBufferQueue.begin());
+							    ALOGV("video delete split I frame queueSize=%d,datasize=%d",(int)(iframeoutput->mBufferQueue.size()),(int)((tmpbuf)->range_length()));
+								tmpbuf->release();
+							}
+						}
+						
+					}
+				}
+				else{
+					if(mfirstSplitFlag){
+						mfirstSplitFlag = false;
 						*buffer = *output->mBufferQueue.begin();
 						(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
 						mFirstVideoTimeUs = timestampUs;
 						(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
-						if(mIsVideo)
-						(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
-						ALOGI("read splitBuffer 33,source=%s,datasize=%d,mBufferQueue.size=%d",mIsVideo?"Video":"Audio",(int)((*buffer)->range_length()),(int)(output->mBufferQueue.size()));
+						ALOGV("read audio splitBuffer 3,datasize=%d",(int)((*buffer)->range_length()));
+					
 					}
 					else{
+						
 						*buffer = *output->mBufferQueue.begin();
 						(*buffer)->meta_data()->findInt64(kKeyTime, &timestampUs);
 						(*buffer)->meta_data()->setInt64(kKeyTime, timestampUs-mFirstVideoTimeUs);
-						if(mIsVideo)
-						(*buffer)->meta_data()->setInt64(kKeyDecodingTime, timestampUs-mFirstVideoTimeUs);
-						ALOGV("split 33 firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
+						ALOGV("split audio 33 firsttimeUs=(%.3f secs),datasize=%d,timeUs=(%.3f secs)",mFirstVideoTimeUs / 1E6,(int)((*buffer)->range_length()),(timestampUs-mFirstVideoTimeUs)/1E6);
 					}
 					output->mBufferQueue.erase(output->mBufferQueue.begin());
-				//}
+				}
 			}
 			else{
 				*buffer = *output->mBufferQueue.begin();
 				ALOGV("read mBufferQueue.size=%d,source=%s,datasize=%d",(int)(output->mBufferQueue.size()),mIsVideo?"Video":"Audio",(int)((*buffer)->range_length()));
 		        output->mBufferQueue.erase(output->mBufferQueue.begin());
+				if(mIsVideo){
+					int32_t isvideoSync = false;
+					(*buffer)->meta_data()->findInt32(kKeyIsSyncFrame, &isvideoSync);
+					ALOGV("check video delete not split I frame isvideoSync=%d",isvideoSync);
+					if(isvideoSync){
+						Mutexed<Output>::Locked iframeoutput(mIframeOutput);
+						if(iframeoutput->mBufferQueue.size() >= 2){
+							MediaBuffer* tmpbuf = *iframeoutput->mBufferQueue.begin();
+							iframeoutput->mBufferQueue.erase(iframeoutput->mBufferQueue.begin());
+						    ALOGV("video delete not split I frame queueSize=%d,datasize=%d",(int)(iframeoutput->mBufferQueue.size()),(int)((tmpbuf)->range_length()));
+							tmpbuf->release();
+						}
+					}
+				}
 			}
 	        return OK;
 		}
@@ -786,7 +887,7 @@ void PoliceMediaCodecSource::signalEOS(status_t err) {
         Mutexed<Output>::Locked output(mOutput);
         reachedEOS = output->mEncoderReachedEOS;
         if (!reachedEOS) {
-            ALOGV("encoder (%s) reached EOS", mIsVideo ? "video" : "audio");
+            ALOGI("encoder (%s) reached EOS", mIsVideo ? "video" : "audio");
             // release all unread media buffers
             for (List<MediaBuffer*>::iterator it = output->mBufferQueue.begin();
                     it != output->mBufferQueue.end(); it++) {
@@ -813,7 +914,7 @@ void PoliceMediaCodecSource::signalEOS(status_t err) {
     if (mStopping && reachedEOS) {
         ALOGI("encoder (%s) stopped", mIsVideo ? "video" : "audio");
         mPuller->stopSource();
-        ALOGV("source (%s) stopped", mIsVideo ? "video" : "audio");
+        ALOGI("source (%s) stopped", mIsVideo ? "video" : "audio");
         // posting reply to everyone that's waiting
         List<sp<AReplyToken>>::iterator it;
         for (it = mStopReplyIDQueue.begin();
@@ -1171,6 +1272,8 @@ void PoliceMediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
                 mbuf->meta_data()->setInt64(kKeyTime, timeUs);
             } else {
                 mbuf->meta_data()->setInt32(kKeyIsCodecConfig, true);
+				//mSplitBuffer
+				
 				if(mPreRecord){
 					mFirstBuffer = new MediaBuffer(mbuf->range_length());
 					memcpy(mFirstBuffer->data(), mbuf->data(), mbuf->range_length());
@@ -1189,6 +1292,56 @@ void PoliceMediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
 			if(mbuf != NULL){
 	            if (flags & MediaCodec::BUFFER_FLAG_SYNCFRAME) {
 	                mbuf->meta_data()->setInt32(kKeyIsSyncFrame, true);
+					if(mIsVideo){
+						//if(!mSplitFlag){
+						
+						Mutexed<Output>::Locked output(mIframeOutput);
+						mSplitBuffer = new MediaBuffer(mbuf->range_length());
+						memcpy(mSplitBuffer->data(), mbuf->data(), mbuf->range_length());
+	            		sp<MetaData> meta2 = mSplitBuffer->meta_data();
+	            		AVUtils::get()->setDeferRelease(meta2);
+	            		mSplitBuffer->setObserver(this);
+	            		mSplitBuffer->add_ref();
+						mSplitBuffer->meta_data()->setInt32(kKeyIsSyncFrame, true);
+						mSplitBuffer->meta_data()->setInt64(kKeyTime, timeUs);
+						output->mBufferQueue.push_back(mSplitBuffer);
+						//output->mCond.signal();
+
+						ALOGE("kKeyIsSyncFrame mSplitBuffer00 bufQueueSize=%d,copy data size=%d",(int)(output->mBufferQueue.size()),(int)(mSplitBuffer->range_length()));
+					
+						/*
+							if(mSplitBuffer != NULL){
+								ALOGE("kKeyIsSyncFrame mSplitBuffer00 copy");
+								mSplitBuffer->release();
+								mSplitBuffer = NULL;
+								ALOGE("kKeyIsSyncFrame mSplitBuffer22 copy");
+								mSplitBuffer = new MediaBuffer(mbuf->range_length());
+								memcpy(mSplitBuffer->data(), mbuf->data(), mbuf->range_length());
+								sp<MetaData> meta3 = mSplitBuffer->meta_data();
+			            		AVUtils::get()->setDeferRelease(meta3);
+								ALOGE("kKeyIsSyncFrame mSplitBuffer33 copy");
+			            		mSplitBuffer->setObserver(this);
+			            		mSplitBuffer->add_ref();
+								ALOGE("kKeyIsSyncFrame mSplitBuffer44 copy");
+								mSplitBuffer->meta_data()->setInt32(kKeyIsSyncFrame, true);
+								mSplitBuffer->meta_data()->setInt64(kKeyTime, timeUs);
+								ALOGE("kKeyIsSyncFrame mSplitBuffer11 copy");
+								
+							}
+							else{
+								mSplitBuffer = new MediaBuffer(mbuf->range_length());
+								memcpy(mSplitBuffer->data(), mbuf->data(), mbuf->range_length());
+			            		sp<MetaData> meta2 = mSplitBuffer->meta_data();
+			            		AVUtils::get()->setDeferRelease(meta2);
+			            		mSplitBuffer->setObserver(this);
+			            		mSplitBuffer->add_ref();
+								mSplitBuffer->meta_data()->setInt32(kKeyIsSyncFrame, true);
+								ALOGE("kKeyIsSyncFrame mSplitBuffer copy");
+							}
+						*/
+					//}
+						
+					}
 	            }
 	            //memcpy(mbuf->data(), outbuf->data(), outbuf->size());
 				//dataStart = (uint8_t*)mbuf->data();
