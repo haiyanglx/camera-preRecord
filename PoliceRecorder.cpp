@@ -1867,8 +1867,22 @@ status_t PoliceRecorder::setupMPEG4Recording() {
 
     mTotalBitRate = 0;
 	//sp<PoliceMPEG4Writer> mMpeg4Writer = dynamic_cast<PoliceMPEG4Writer*> (mWriter);
+	if (OK != checkAudioEncoderCapabilities()) {
+		ALOGE("Create audioSource 1 Error");
+        return UNKNOWN_ERROR;
+    }
+	mAudioEncoderSource =  createAudioSource();
+	if (mAudioEncoderSource == NULL) {
+		ALOGE("Create audioSource  2 Error");
+        return UNKNOWN_ERROR;
+    }
 	mVideoEncoderSource->setSplitFlag(true);
 	mAudioEncoderSource->setSplitFlag(true);
+
+	mVideoEncoderSource->setPreRecord(false);
+	mAudioEncoderSource->setPreRecord(false);
+
+	
     mMpeg4Writer = new PoliceMPEG4Writer(mOutputFd);
 	mMpeg4Writer->addSource(mVideoEncoderSource);
     mTotalBitRate += mVideoBitRate;
@@ -2105,6 +2119,10 @@ status_t PoliceRecorder::stop(bool flag) {
         mMpeg4Writer.clear();
 		mMpeg4Writer = NULL;
     }
+
+	//mVideoEncoderSource->setSplitFlag(true);
+
+	mAudioEncoderSource.clear();
     
     if (mOutputFd >= 0) {
         ::close(mOutputFd);
